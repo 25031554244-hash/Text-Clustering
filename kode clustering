@@ -1,0 +1,342 @@
+# ============================================================
+# CLUSTERING TEKS PROVINSI INDONESIA
+# Feature Engineering: TF-IDF
+# Metode: K-Means, Agglomerative, Hierarchical, DBSCAN, GMM
+# Output: Excel, CSV, grafik clustering, dendrogram, evaluasi
+# ============================================================
+
+!pip -q install requests beautifulsoup4 pandas matplotlib scikit-learn openpyxl lxml scipy
+
+import os
+import re
+import warnings
+import requests
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from bs4 import BeautifulSoup
+from IPython.display import display
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN
+from sklearn.mixture import GaussianMixture
+from sklearn.decomposition import TruncatedSVD
+from sklearn.metrics import silhouette_score
+from sklearn.metrics.pairwise import cosine_similarity
+from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
+
+warnings.filterwarnings("ignore")
+
+# ============================================================
+# 1. PERSIAPAN FOLDER
+# ============================================================
+
+output_folder = "Hasil_Clustering_Text"
+os.makedirs(output_folder, exist_ok=True)
+
+print("=" * 65)
+print("ANALISIS CLUSTERING TEKS PROVINSI INDONESIA")
+print("=" * 65)
+
+# ============================================================
+# 2. SCRAPING DATA PROVINSI DARI WIKIPEDIA (DIPERBAIKI)
+# ============================================================
+
+print("\n[1] Mengambil data dari Wikipedia...")
+
+url = "https://en.wikipedia.org/wiki/Provinces_of_Indonesia"
+headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+response = requests.get(url, headers=headers, timeout=40)
+response.raise_for_status()
+
+tables = pd.read_html(response.text)
+
+df_raw = None
+prov_col_idx = None
+cap_col_idx = None
+
+# Mencari tabel yang memuat kata kunci kota/provinsi utama
+for table in tables:
+    # Ratakan header jika bertingkat (MultiIndex)
+    if isinstance(table.columns, pd.MultiIndex):
+        table.columns = [' '.join([str(c) for c in col if 'unnamed' not in str(c).lower()]).strip() for col in table.columns]
+    else:
+        table.columns = [str(col).strip() for col in table.columns]
+    
+    # Konversi seluruh isi sel menjadi string untuk pengecekan
+    table_str = table.astype(str).values.flatten()
+    full_text = " ".join(table_str).lower()
+
+    # Pastikan tabel berisi data provinsi sebenarnya
+    if "banda aceh" in full_text and "jakarta" in full_text:
+        # Cari indeks kolom Provinsi dan Ibu Kota
+        for idx, col in enumerate(table.columns):
+            col_lower = str(col).lower()
+            if any(k in col_lower for k in ["province", "provinsi", "name"]):
+                if prov_col_idx is None:
+                    prov_col_idx = idx
+            if any(k in col_lower for k in ["capital", "ibu kota"]):
+                if cap_col_idx is None:
+                    cap_col_idx = idx
+        
+        if prov_col_idx is not None and cap_col_idx is not None:
+            df_raw = table.copy()
+            break
+
+if df_raw is None:
+    # Fallback: Cari tabel terbesar yang memiliki setidaknya 30 baris
+    for table in tables:
+        if len(table) >= 30:
+            df_raw = table.iloc[:, :2].copy()
+            prov_col_idx, cap_col_idx = 0, 1
+            break
+
+if df_raw is None:
+    raise ValueError("Tabel provinsi tidak ditemukan di Wikipedia.")
+
+def clean_cell(value):
+    value = str(value)
+    value = re.sub(r"\[[^\]]*\]", "", value)  # Hapus sitasi [1], [2], dst.
+    value = re.sub(r"\s+", " ", value)
+    return value.strip()
+
+# Buat DataFrame bersih
+df = pd.DataFrame({
+    "Province": df_raw.iloc[:, prov_col_idx].apply(clean_cell),
+    "Capital": df_raw.iloc[:, cap_col_idx].apply(clean_cell)
+})
+
+# Filter baris header, NaN, atau baris tidak valid
+df = df[
+    df["Province"].ne("") & 
+    ~df["Province"].str.lower().str.contains("province|provinsi|name|nan|total") &
+    df["Capital"].ne("") & 
+    ~df["Capital"].str.lower().str.contains("capital|ibu kota|nan")
+].copy()
+
+df = df.drop_duplicates(subset=["Province"]).reset_index(drop=True)
+df["Indonesian_Name"] = df["Province"]
+
+df["Wikipedia_URL"] = df["Province"].apply(
+    lambda name: "https://en.wikipedia.org/wiki/" + requests.utils.quote(str(name).replace(" ", "_"))
+)
+
+print(f"Berhasil mengambil {len(df)} data provinsi.")
+display(df.head(10))
+
+# ============================================================
+# 3. PREPROCESSING TEKS
+# ============================================================
+
+print("\n[2] Melakukan preprocessing teks...")
+
+def preprocess_text(text):
+    text = str(text).lower()
+    text = re.sub(r"\[[^\]]+\]", " ", text)
+    text = re.sub(r"[^a-z0-9\s-]", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+df["Text_Gabungan"] = (
+    df["Province"].fillna("").astype(str) + " " +
+    df["Indonesian_Name"].fillna("").astype(str) + " " +
+    df["Capital"].fillna("").astype(str)
+)
+
+df["Text_Preprocessing"] = df["Text_Gabungan"].apply(preprocess_text)
+
+display(df[["Province", "Capital", "Text_Preprocessing"]].head(10))
+
+# ============================================================
+# 4. FEATURE ENGINEERING: TF-IDF
+# ============================================================
+
+print("\n[3] Melakukan feature engineering dengan TF-IDF...")
+
+vectorizer = TfidfVectorizer(lowercase=True, ngram_range=(1, 2))
+tfidf_matrix = vectorizer.fit_transform(df["Text_Preprocessing"])
+terms = vectorizer.get_feature_names_out()
+
+print("Jumlah dokumen:", tfidf_matrix.shape[0])
+print("Jumlah fitur TF-IDF:", tfidf_matrix.shape[1])
+
+tfidf_df = pd.DataFrame(tfidf_matrix.toarray(), columns=terms)
+tfidf_df.insert(0, "Province", df["Province"].values)
+
+display(tfidf_df.head())
+
+# ============================================================
+# 5. REDUKSI DIMENSI UNTUK VISUALISASI DAN GMM
+# ============================================================
+
+print("\n[4] Melakukan reduksi dimensi...")
+
+n_data = tfidf_matrix.shape[0]
+n_features = tfidf_matrix.shape[1]
+
+# SVD untuk plotting 2D
+n_plot_components = min(2, n_data - 1, n_features)
+svd_plot = TruncatedSVD(n_components=n_plot_components, random_state=42)
+X_reduced = svd_plot.fit_transform(tfidf_matrix)
+
+if n_plot_components == 1:
+    X_plot = np.column_stack([X_reduced[:, 0], np.zeros(n_data)])
+else:
+    X_plot = X_reduced
+
+# SVD untuk Gaussian Mixture Model
+n_gmm_components = min(5, n_data - 1, n_features)
+svd_gmm = TruncatedSVD(n_components=n_gmm_components, random_state=42)
+X_gmm = svd_gmm.fit_transform(tfidf_matrix)
+
+# ============================================================
+# 6. FUNGSI EVALUASI
+# ============================================================
+
+def hitung_silhouette(X, labels, metric="euclidean"):
+    labels = np.asarray(labels)
+    valid = labels != -1
+    X_valid = X[valid]
+    labels_valid = labels[valid]
+
+    jumlah_cluster = len(np.unique(labels_valid))
+    if jumlah_cluster < 2 or jumlah_cluster >= len(labels_valid):
+        return np.nan
+
+    try:
+        return silhouette_score(X_valid, labels_valid, metric=metric)
+    except Exception:
+        return np.nan
+
+hasil_label = {}
+ringkasan = []
+
+def simpan_hasil(nama, labels, score):
+    labels = np.asarray(labels)
+    hasil_label[nama] = labels
+    jumlah_cluster = len(set(labels) - {-1})
+    jumlah_noise = int(np.sum(labels == -1))
+
+    ringkasan.append({
+        "Metode": nama,
+        "Jumlah_Cluster": jumlah_cluster,
+        "Jumlah_Noise": jumlah_noise,
+        "Silhouette_Score": score
+    })
+
+# ============================================================
+# 7. METODE CLUSTERING (1 s/d 5)
+# ============================================================
+
+print("\n[5] Menjalankan K-Means...")
+jumlah_cluster = min(3, n_data - 1)
+
+model_kmeans = KMeans(n_clusters=jumlah_cluster, random_state=42, n_init=10)
+labels_kmeans = model_kmeans.fit_predict(tfidf_matrix)
+score_kmeans = hitung_silhouette(tfidf_matrix, labels_kmeans, metric="cosine")
+simpan_hasil("K-Means", labels_kmeans, score_kmeans)
+
+print("\n[6] Menjalankan Agglomerative Clustering...")
+model_agglo = AgglomerativeClustering(n_clusters=jumlah_cluster, linkage="average", metric="cosine")
+labels_agglo = model_agglo.fit_predict(tfidf_matrix.toarray())
+score_agglo = hitung_silhouette(tfidf_matrix, labels_agglo, metric="cosine")
+simpan_hasil("Agglomerative", labels_agglo, score_agglo)
+
+print("\n[7] Menjalankan Hierarchical Clustering...")
+similarity_matrix = cosine_similarity(tfidf_matrix)
+distance_matrix = np.clip(1 - similarity_matrix, 0, 1)
+np.fill_diagonal(distance_matrix, 0)
+
+linkage_matrix = linkage(distance_matrix[np.triu_indices(n_data, k=1)], method="average")
+labels_hierarchical = fcluster(linkage_matrix, t=jumlah_cluster, criterion="maxclust") - 1
+score_hierarchical = hitung_silhouette(distance_matrix, labels_hierarchical, metric="precomputed")
+simpan_hasil("Hierarchical", labels_hierarchical, score_hierarchical)
+
+print("\n[8] Menjalankan DBSCAN...")
+model_dbscan = DBSCAN(eps=0.75, min_samples=2, metric="cosine")
+labels_dbscan = model_dbscan.fit_predict(tfidf_matrix)
+score_dbscan = hitung_silhouette(tfidf_matrix, labels_dbscan, metric="cosine")
+simpan_hasil("DBSCAN", labels_dbscan, score_dbscan)
+
+print("\n[9] Menjalankan Gaussian Mixture Model...")
+model_gmm = GaussianMixture(n_components=jumlah_cluster, random_state=42, n_init=5, reg_covar=1e-5)
+labels_gmm = model_gmm.fit_predict(X_gmm)
+score_gmm = hitung_silhouette(X_gmm, labels_gmm, metric="euclidean")
+simpan_hasil("GMM", labels_gmm, score_gmm)
+
+# ============================================================
+# 8. TABEL PERBANDINGAN & HASIL
+# ============================================================
+
+print("\n[10] Perbandingan hasil clustering...")
+evaluasi_df = pd.DataFrame(ringkasan)
+evaluasi_df["Silhouette_Score"] = evaluasi_df["Silhouette_Score"].round(4)
+display(evaluasi_df)
+
+hasil_cluster_df = df[["Province", "Capital", "Text_Preprocessing"]].copy()
+for nama, labels in hasil_label.items():
+    kolom = "Cluster_" + nama.replace("-", "").replace(" ", "_")
+    hasil_cluster_df[kolom] = labels
+
+display(hasil_cluster_df.head(15))
+
+# ============================================================
+# 9. VISUALISASI CLUSTERING & DENDROGRAM
+# ============================================================
+
+print("\n[11] Membuat visualisasi clustering...")
+for nama, labels in hasil_label.items():
+    plt.figure(figsize=(10, 6))
+    plt.scatter(X_plot[:, 0], X_plot[:, 1], c=labels, cmap="tab10", s=80, edgecolors="black")
+
+    for i, province in enumerate(df["Province"]):
+        plt.annotate(
+            province,
+            (X_plot[i, 0], X_plot[i, 1]),
+            fontsize=7,
+            xytext=(4, 4),
+            textcoords="offset points"
+        )
+
+    plt.title(f"Visualisasi Clustering: {nama}")
+    plt.xlabel("Dimensi 1 (SVD TF-IDF)")
+    plt.ylabel("Dimensi 2 (SVD TF-IDF)")
+    plt.tight_layout()
+
+    nama_file = nama.lower().replace(" ", "_").replace("-", "_")
+    plt.savefig(os.path.join(output_folder, f"Cluster_{nama_file}.png"), dpi=300, bbox_inches="tight")
+    plt.show()
+    plt.close()
+
+print("\n[12] Membuat dendrogram...")
+plt.figure(figsize=(14, 7))
+dendrogram(linkage_matrix, labels=df["Province"].tolist(), leaf_rotation=90, leaf_font_size=8)
+plt.title("Dendrogram Hierarchical Clustering")
+plt.xlabel("Provinsi")
+plt.ylabel("Jarak Cosine")
+plt.tight_layout()
+plt.savefig(os.path.join(output_folder, "Dendrogram_Hierarchical.png"), dpi=300, bbox_inches="tight")
+plt.show()
+plt.close()
+
+# ============================================================
+# 10. EKSPOR EKSEL DAN CSV
+# ============================================================
+
+print("\n[13] Mengekspor hasil...")
+excel_file = os.path.join(output_folder, "Hasil_Clustering_Text.xlsx")
+
+with pd.ExcelWriter(excel_file, engine="openpyxl") as writer:
+    df.to_excel(writer, sheet_name="Data_Preprocessing", index=False)
+    tfidf_df.to_excel(writer, sheet_name="Feature_TFIDF", index=False)
+    hasil_cluster_df.to_excel(writer, sheet_name="Anggota_Cluster", index=False)
+    evaluasi_df.to_excel(writer, sheet_name="Evaluasi_Metode", index=False)
+
+hasil_cluster_df.to_csv(os.path.join(output_folder, "Anggota_Cluster.csv"), index=False, encoding="utf-8-sig")
+evaluasi_df.to_csv(os.path.join(output_folder, "Evaluasi_Metode.csv"), index=False, encoding="utf-8-sig")
+
+print("\n" + "=" * 65)
+print("PROSES CLUSTERING SELESAI SANCAK!")
+print("=" * 65)
+print("File tersimpan di folder:", output_folder)
