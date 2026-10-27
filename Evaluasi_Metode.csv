@@ -1,0 +1,6 @@
+﻿Metode,Jumlah_Cluster,Jumlah_Noise,Silhouette_Score
+K-Means,3,0,0.0466
+Agglomerative,3,0,0.0317
+Hierarchical,1,0,
+DBSCAN,4,26,0.317
+GMM,3,0,0.263

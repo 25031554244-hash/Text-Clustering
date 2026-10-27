@@ -1,0 +1,37 @@
+﻿Province,Capital,Text_Preprocessing,Cluster_KMeans,Cluster_Agglomerative,Cluster_Hierarchical,Cluster_DBSCAN,Cluster_GMM
+Aceh,Banda Aceh,aceh aceh banda aceh,0,0,0,-1,2
+North Sumatra,Medan,north sumatra north sumatra medan,1,1,0,-1,0
+West Sumatra,Padang,west sumatra west sumatra padang,1,1,0,-1,0
+Riau,Pekanbaru,riau riau pekanbaru,0,0,0,-1,2
+Jambi,Jambi,jambi jambi jambi,0,0,0,-1,2
+South Sumatra,Palembang,south sumatra south sumatra palembang,1,1,0,-1,0
+Bengkulu,Bengkulu,bengkulu bengkulu bengkulu,0,0,0,-1,2
+Lampung,Bandar Lampung,lampung lampung bandar lampung,0,0,0,-1,2
+Special Capital Region of Jakarta,Central Jakarta (de facto),special capital region of jakarta special capital region of jakarta central jakarta de facto,0,1,0,0,2
+West Java,Bandung,west java west java bandung,0,1,0,-1,1
+Central Java,Semarang,central java central java semarang,0,1,0,-1,1
+Special Region of Yogyakarta,Yogyakarta,special region of yogyakarta special region of yogyakarta yogyakarta,0,1,0,0,2
+East Java,Surabaya,east java east java surabaya,0,1,0,-1,1
+Banten,Serang,banten banten serang,0,0,0,-1,2
+Bali,Denpasar,bali bali denpasar,0,0,0,-1,2
+West Nusa Tenggara,Mataram,west nusa tenggara west nusa tenggara mataram,0,1,0,1,1
+East Nusa Tenggara,Kupang,east nusa tenggara east nusa tenggara kupang,0,1,0,1,1
+West Kalimantan,Pontianak,west kalimantan west kalimantan pontianak,0,1,0,-1,1
+Central Kalimantan,Palangka Raya,central kalimantan central kalimantan palangka raya,0,1,0,-1,1
+South Kalimantan,Banjarbaru,south kalimantan south kalimantan banjarbaru,0,1,0,-1,0
+East Kalimantan,Samarinda,east kalimantan east kalimantan samarinda,0,1,0,-1,1
+North Kalimantan,Tanjung Selor,north kalimantan north kalimantan tanjung selor,1,1,0,-1,0
+North Sulawesi,Manado,north sulawesi north sulawesi manado,1,1,0,-1,0
+Central Sulawesi,Palu,central sulawesi central sulawesi palu,0,1,0,-1,0
+South Sulawesi,Makassar,south sulawesi south sulawesi makassar,0,1,0,-1,0
+Southeast Sulawesi,Kendari,southeast sulawesi southeast sulawesi kendari,0,1,0,-1,0
+Gorontalo,Gorontalo,gorontalo gorontalo gorontalo,0,2,0,-1,2
+West Sulawesi,Mamuju,west sulawesi west sulawesi mamuju,0,1,0,-1,0
+Maluku,Ambon,maluku maluku ambon,0,1,0,2,2
+North Maluku,Sofifi,north maluku north maluku sofifi,1,1,0,2,0
+Papua,Jayapura,papua papua jayapura,2,1,0,3,2
+West Papua,Manokwari,west papua west papua manokwari,2,1,0,3,2
+South Papua,Merauke,south papua south papua merauke,2,1,0,3,2
+Central Papua,Nabire,central papua central papua nabire,2,1,0,3,2
+Highland Papua,Jayawijaya,highland papua highland papua jayawijaya,2,1,0,-1,2
+Southwest Papua,Sorong,southwest papua southwest papua sorong,2,1,0,-1,2
