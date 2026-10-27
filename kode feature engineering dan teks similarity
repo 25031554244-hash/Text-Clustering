@@ -1,0 +1,580 @@
+# ============================================================
+# IMPLEMENTASI TEXT SIMILARITY
+# TF-IDF + COSINE SIMILARITY + HEATMAP
+# SCRAPING PROVINSI INDONESIA DARI WIKIPEDIA
+# ============================================================
+
+!pip -q install requests beautifulsoup4 pandas matplotlib scikit-learn openpyxl lxml
+
+import os
+import re
+import requests
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from bs4 import BeautifulSoup
+from IPython.display import display
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+# ============================================================
+# 1. FOLDER OUTPUT
+# ============================================================
+
+output_folder = "Hasil_Text_Similarity"
+os.makedirs(output_folder, exist_ok=True)
+
+print("=" * 65)
+print("IMPLEMENTASI TEXT SIMILARITY")
+print("METODE TF-IDF DAN COSINE SIMILARITY")
+print("=" * 65)
+
+# ============================================================
+# 2. SCRAPING DATA WIKIPEDIA
+# ============================================================
+
+print("\n[1] Mengambil data provinsi dari Wikipedia...")
+
+url = "https://en.wikipedia.org/wiki/Provinces_of_Indonesia"
+headers = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+}
+
+response = requests.get(url, headers=headers, timeout=40)
+response.raise_for_status()
+
+# Membaca tabel langsung dari HTML
+tables = pd.read_html(response.text)
+
+print("Jumlah tabel yang ditemukan:", len(tables))
+
+# Memilih tabel yang memiliki kolom provinsi dan data yang relevan
+target_df = None
+province_col = None
+capital_col = None
+
+for table in tables:
+    # Merapikan nama kolom
+    table.columns = [
+        " ".join(str(x) for x in col if str(x) != "nan")
+        if isinstance(col, tuple) else str(col)
+        for col in table.columns
+    ]
+
+    normalized_columns = {
+        col: re.sub(r"\s+", " ", str(col)).strip().lower()
+        for col in table.columns
+    }
+
+    # Cari kolom provinsi
+    p_col = next(
+        (
+            col for col, name in normalized_columns.items()
+            if name in ["province", "provinces", "province name",
+                        "provinsi", "nama provinsi"]
+            or "province name" in name
+        ),
+        None
+    )
+
+    # Cari kolom ibu kota
+    c_col = next(
+        (
+            col for col, name in normalized_columns.items()
+            if "capital" in name or "ibu kota" in name
+        ),
+        None
+    )
+
+    # Jika nama kolom tidak jelas, cari berdasarkan isi tabel
+    data_text = " ".join(
+        table.astype(str).values.flatten()
+    ).lower()
+
+    has_indonesia_data = any(
+        word in data_text
+        for word in ["banda aceh", "aceh", "jakarta", "bali"]
+    )
+
+    if p_col is not None and has_indonesia_data:
+        target_df = table.copy()
+        province_col = p_col
+        capital_col = c_col
+        break
+
+# Fallback: cari tabel dengan isi data provinsi
+if target_df is None:
+    for table in tables:
+        data_text = " ".join(
+            table.astype(str).values.flatten()
+        ).lower()
+
+        if (
+            "banda aceh" in data_text
+            and ("jakarta" in data_text or "aceh" in data_text)
+        ):
+            target_df = table.copy()
+            break
+
+if target_df is None:
+    print("\nTabel yang berhasil ditemukan:")
+    for i, table in enumerate(tables):
+        print(f"Tabel {i + 1}: {list(table.columns)}")
+
+    raise ValueError(
+        "Tabel provinsi tidak berhasil diidentifikasi. "
+        "Periksa struktur tabel yang ditampilkan."
+    )
+
+# Merapikan kolom jika ditemukan melalui fallback
+target_df.columns = [
+    " ".join(str(x) for x in col if str(x) != "nan")
+    if isinstance(col, tuple) else str(col)
+    for col in target_df.columns
+]
+
+# Jika kolom belum dikenali, tentukan kembali
+if province_col not in target_df.columns:
+    province_col = None
+
+if capital_col not in target_df.columns:
+    capital_col = None
+
+def find_column(columns, keywords):
+    for col in columns:
+        name = str(col).lower()
+        if any(keyword in name for keyword in keywords):
+            return col
+    return None
+
+if province_col is None:
+    province_col = find_column(
+        target_df.columns,
+        ["province", "provinsi"]
+    )
+
+if capital_col is None:
+    capital_col = find_column(
+        target_df.columns,
+        ["capital", "ibu kota"]
+    )
+
+# Fallback jika nama kolom tidak sesuai
+if province_col is None:
+    province_col = target_df.columns[0]
+
+if capital_col is None:
+    remaining = [
+        col for col in target_df.columns
+        if col != province_col
+    ]
+    capital_col = remaining[0] if remaining else province_col
+
+print("Kolom provinsi:", province_col)
+print("Kolom ibu kota:", capital_col)
+
+def clean_cell(value):
+    value = str(value)
+    value = re.sub(r"\[[^\]]*\]", "", value)
+    value = re.sub(r"\s+", " ", value)
+    return value.strip()
+
+df = pd.DataFrame({
+    "Province": target_df[province_col].apply(clean_cell),
+    "Capital": target_df[capital_col].apply(clean_cell)
+})
+
+# Bersihkan data yang tidak valid
+df = df[
+    df["Province"].ne("") &
+    df["Province"].ne("nan") &
+    ~df["Province"].str.lower().isin(
+        ["province", "provinces", "provinsi", "name"]
+    )
+].copy()
+
+df = df.drop_duplicates(subset=["Province"]).reset_index(drop=True)
+
+# Tambahkan kolom nama Indonesia dan URL sumber
+df["Indonesian_Name"] = df["Province"]
+
+def make_wikipedia_url(name):
+    slug = str(name).strip().replace(" ", "_")
+    return "https://en.wikipedia.org/wiki/" + requests.utils.quote(slug)
+
+df["Wikipedia_URL"] = df["Province"].apply(make_wikipedia_url)
+
+if df.empty:
+    raise ValueError("Data provinsi kosong setelah proses pembersihan.")
+
+print("\nJumlah baris hasil scraping:", len(df))
+display(df.head(10))
+
+# Simpan data mentah yang sudah dirapikan
+df.to_csv(
+    os.path.join(output_folder, "Data_Provinsi_Indonesia.csv"),
+    index=False,
+    encoding="utf-8-sig"
+)
+
+# ============================================================
+# 3. PREPROCESSING TEKS
+# ============================================================
+
+print("\n[2] Melakukan preprocessing teks...")
+
+def preprocess_text(text):
+    text = str(text).lower()
+    text = re.sub(r"\[[^\]]+\]", " ", text)
+    text = re.sub(r"[^a-z0-9\s-]", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+df["Text_Gabungan"] = (
+    df["Province"].fillna("").astype(str) + " " +
+    df["Indonesian_Name"].fillna("").astype(str) + " " +
+    df["Capital"].fillna("").astype(str)
+)
+
+df["Text_Preprocessing"] = df["Text_Gabungan"].apply(preprocess_text)
+
+display(
+    df[["Province", "Capital", "Text_Preprocessing"]].head(10)
+)
+
+# ============================================================
+# 4. PEMBOBOTAN TF-IDF
+# ============================================================
+
+print("\n[3] Menghitung bobot TF-IDF...")
+
+vectorizer = TfidfVectorizer(
+    lowercase=True,
+    ngram_range=(1, 2)
+)
+
+tfidf_matrix = vectorizer.fit_transform(
+    df["Text_Preprocessing"]
+)
+
+terms = vectorizer.get_feature_names_out()
+
+tfidf_df = pd.DataFrame(
+    tfidf_matrix.toarray(),
+    columns=terms
+)
+
+tfidf_df.insert(0, "Province", df["Province"].values)
+
+print("Jumlah dokumen:", tfidf_matrix.shape[0])
+print("Jumlah fitur TF-IDF:", tfidf_matrix.shape[1])
+
+# ============================================================
+# 5. QUERY DAN COSINE SIMILARITY
+# ============================================================
+
+print("\n[4] Menghitung Cosine Similarity...")
+
+query = "province with capital city Banda Aceh"
+query_clean = preprocess_text(query)
+query_tfidf = vectorizer.transform([query_clean])
+
+query_similarities = cosine_similarity(
+    query_tfidf,
+    tfidf_matrix
+).flatten()
+
+all_scores_df = df[
+    ["Province", "Capital", "Wikipedia_URL", "Text_Preprocessing"]
+].copy()
+
+all_scores_df["Similarity_Score"] = query_similarities
+all_scores_df["Similarity_Percentage"] = (
+    query_similarities * 100
+).round(2)
+
+all_scores_df = all_scores_df.sort_values(
+    "Similarity_Score",
+    ascending=False
+).reset_index(drop=True)
+
+all_scores_df.insert(
+    0,
+    "Ranking",
+    range(1, len(all_scores_df) + 1)
+)
+
+top_k = min(10, len(all_scores_df))
+top10_df = all_scores_df.head(top_k).copy()
+
+print("\nQuery:", query)
+print("\nHasil Top 10:")
+display(
+    top10_df[
+        [
+            "Ranking",
+            "Province",
+            "Capital",
+            "Similarity_Score",
+            "Similarity_Percentage"
+        ]
+    ]
+)
+
+# ============================================================
+# 6. GRAFIK TOP 10
+# ============================================================
+
+print("\n[5] Membuat grafik Top 10...")
+
+plt.figure(figsize=(12, 6))
+plt.barh(
+    top10_df["Province"].astype(str).iloc[::-1],
+    top10_df["Similarity_Score"].iloc[::-1]
+)
+plt.xlabel("Cosine Similarity Score")
+plt.ylabel("Provinsi")
+plt.title("Top 10 Text Similarity\nQuery: " + query)
+plt.tight_layout()
+
+top10_graph = os.path.join(
+    output_folder,
+    "Grafik_Top10_Text_Similarity.png"
+)
+
+plt.savefig(top10_graph, dpi=300, bbox_inches="tight")
+plt.show()
+plt.close()
+
+# ============================================================
+# 7. GRAFIK DISTRIBUSI SIMILARITY
+# ============================================================
+
+print("\n[6] Membuat grafik distribusi skor...")
+
+plt.figure(figsize=(10, 6))
+plt.hist(
+    all_scores_df["Similarity_Score"],
+    bins=10,
+    edgecolor="black"
+)
+plt.xlabel("Cosine Similarity Score")
+plt.ylabel("Jumlah Provinsi")
+plt.title("Distribusi Skor Cosine Similarity terhadap Query")
+plt.tight_layout()
+
+distribution_graph = os.path.join(
+    output_folder,
+    "Grafik_Distribusi_Similarity.png"
+)
+
+plt.savefig(distribution_graph, dpi=300, bbox_inches="tight")
+plt.show()
+plt.close()
+
+# ============================================================
+# 8. HEATMAP KEMIRIPAN ANTARPROVINSI
+# ============================================================
+
+print("\n[7] Membuat heatmap...")
+
+similarity_matrix = cosine_similarity(tfidf_matrix)
+province_labels = df["Province"].astype(str).tolist()
+
+fig_size = max(10, min(20, len(province_labels) * 0.45))
+
+plt.figure(figsize=(fig_size, fig_size))
+
+heatmap = plt.imshow(
+    similarity_matrix,
+    cmap="YlOrRd",
+    interpolation="nearest",
+    vmin=0,
+    vmax=1,
+    aspect="auto"
+)
+
+colorbar = plt.colorbar(heatmap)
+colorbar.set_label("Cosine Similarity Score")
+
+plt.xticks(
+    range(len(province_labels)),
+    province_labels,
+    rotation=90,
+    fontsize=7
+)
+plt.yticks(
+    range(len(province_labels)),
+    province_labels,
+    fontsize=7
+)
+
+plt.title(
+    "Heatmap Text Similarity Antarprovinsi Indonesia\n"
+    "TF-IDF dan Cosine Similarity"
+)
+plt.xlabel("Provinsi")
+plt.ylabel("Provinsi")
+plt.tight_layout()
+
+heatmap_file = os.path.join(
+    output_folder,
+    "Heatmap_Text_Similarity.png"
+)
+
+plt.savefig(heatmap_file, dpi=300, bbox_inches="tight")
+plt.show()
+plt.close()
+
+heatmap_df = pd.DataFrame(
+    similarity_matrix,
+    index=province_labels,
+    columns=province_labels
+)
+heatmap_df.index.name = "Province"
+
+heatmap_csv = os.path.join(
+    output_folder,
+    "Matriks_Heatmap_Similarity.csv"
+)
+
+heatmap_df.to_csv(heatmap_csv, encoding="utf-8-sig")
+
+# ============================================================
+# 9. ANALISIS QUERY DAN RINGKASAN
+# ============================================================
+
+print("\n[8] Membuat tabel analisis dan ringkasan...")
+
+analysis_df = pd.DataFrame({
+    "Item": [
+        "Query",
+        "Metode",
+        "Jumlah dokumen",
+        "Jumlah fitur TF-IDF",
+        "Hasil ranking tertinggi",
+        "Skor similarity tertinggi",
+        "Interpretasi"
+    ],
+    "Nilai": [
+        query,
+        "TF-IDF dan Cosine Similarity",
+        len(df),
+        len(terms),
+        top10_df.iloc[0]["Province"] if len(top10_df) else "-",
+        round(float(top10_df.iloc[0]["Similarity_Score"]), 4)
+        if len(top10_df) else 0,
+        "Skor mendekati 1 berarti kemiripan teks lebih tinggi."
+    ]
+})
+
+summary_df = pd.DataFrame({
+    "Metrik": [
+        "Jumlah dokumen",
+        "Jumlah fitur TF-IDF",
+        "Query pencarian",
+        "Rata-rata skor similarity",
+        "Skor maksimum",
+        "Skor minimum"
+    ],
+    "Nilai": [
+        len(df),
+        len(terms),
+        query,
+        round(float(all_scores_df["Similarity_Score"].mean()), 4),
+        round(float(all_scores_df["Similarity_Score"].max()), 4),
+        round(float(all_scores_df["Similarity_Score"].min()), 4)
+    ]
+})
+
+# ============================================================
+# 10. EKSPOR EXCEL
+# ============================================================
+
+print("\n[9] Mengekspor semua hasil ke Excel dan CSV...")
+
+excel_file = os.path.join(
+    output_folder,
+    "Implementasi_Lengkap_Text_Similarity.xlsx"
+)
+
+with pd.ExcelWriter(excel_file, engine="openpyxl") as writer:
+    df.to_excel(
+        writer,
+        sheet_name="Data_Preprocessing",
+        index=False
+    )
+    tfidf_df.to_excel(
+        writer,
+        sheet_name="Bobot_TFIDF",
+        index=False
+    )
+    all_scores_df.to_excel(
+        writer,
+        sheet_name="Semua_Skor",
+        index=False
+    )
+    top10_df.to_excel(
+        writer,
+        sheet_name="Top_10_Hasil",
+        index=False
+    )
+    analysis_df.to_excel(
+        writer,
+        sheet_name="Analisis_Query",
+        index=False
+    )
+    summary_df.to_excel(
+        writer,
+        sheet_name="Ringkasan",
+        index=False
+    )
+    heatmap_df.to_excel(
+        writer,
+        sheet_name="Matriks_Heatmap"
+    )
+
+# Ekspor tabel ke CSV
+csv_outputs = {
+    "Data_Preprocessing.csv": df,
+    "Bobot_TFIDF.csv": tfidf_df,
+    "Hasil_Top10_Text_Similarity.csv": top10_df,
+    "Semua_Skor_Text_Similarity.csv": all_scores_df
+}
+
+for filename, dataframe in csv_outputs.items():
+    dataframe.to_csv(
+        os.path.join(output_folder, filename),
+        index=False,
+        encoding="utf-8-sig"
+    )
+
+# ============================================================
+# 11. DAFTAR HASIL
+# ============================================================
+
+print("\n" + "=" * 65)
+print("PROSES SELESAI")
+print("=" * 65)
+print("Folder hasil:", output_folder)
+
+for filename in sorted(os.listdir(output_folder)):
+    print("-", os.path.join(output_folder, filename))
+
+print("\nPreview Top 10 hasil similarity:")
+display(
+    top10_df[
+        [
+            "Ranking",
+            "Province",
+            "Capital",
+            "Similarity_Score",
+            "Similarity_Percentage"
+        ]
+    ]
+)
+
+print(
+    "\nCatatan: heatmap menunjukkan kemiripan teks antarprovinsi, "
+    "bukan jarak geografis."
+)
